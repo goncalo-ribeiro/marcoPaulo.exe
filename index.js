@@ -46,7 +46,7 @@ client.on('ready', async function (evt) {
             connection.destroy()
     });
     //UNCOMMENT
-    registerSlashCommands(client.user.id, nvideaID, token);
+    // registerSlashCommands(client.user.id, nvideaID, token);
 });
 
 eventEmitter.on('new video', () => {
