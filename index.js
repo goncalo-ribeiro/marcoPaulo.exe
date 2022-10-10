@@ -1,7 +1,7 @@
 const events = require('events');
 const eventEmitter = new events.EventEmitter();
 
-const { REST, SlashCommandBuilder, Routes, Client, GatewayIntentBits } = require('discord.js');
+const { REST, SlashCommandBuilder, Routes, Client, GatewayIntentBits, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } = require('discord.js');
 const Discord = require('discord.js');
 const client = new Client({ intents: 
     // [GatewayIntentBits.Guilds] 
@@ -11,8 +11,11 @@ const client = new Client({ intents:
 const {AudioPlayerStatus, StreamType, createAudioPlayer, createAudioResource, joinVoiceChannel, getVoiceConnection } = require('@discordjs/voice');
 const player = createAudioPlayer();
 
+const {token, nvideaID, tarasManiasID, ytToken} = require('./auth.json');
 const ytdl = require('ytdl-core');
-const {token, nvideaID, tarasManiasID} = require('./auth.json');
+const search = require('youtube-search');
+const yts = require( 'yt-search' )
+var searchOpts = {maxResults: 5, key: ytToken};
 const { disconnect } = require('process');
 
 let queuedVideos = [];
@@ -76,12 +79,25 @@ async function playNextVideo(connection){
     connection.subscribe(player);
 }
 
+/*status:
+    -2: not in voice chat
+    -1: search problem
+    1:  url added
+    2:  search results
+*/
 async function addURLToQueue(interaction){
     // console.log(interaction)
     const memberId = interaction.member.user.id;
     const guildId = interaction.guildId;
     const url = interaction.options.getString('url');
 
+    const voiceChannel = interaction.member.voice.channel
+    // let voiceChannel = client.guilds.cache.get(guildId).voiceStates.cache.get(memberId)?.channel;
+    // console.log(voiceChannel, voiceChannel2)
+    if(!voiceChannel){
+        // return 'You must be on a voice channel to add a video to the queue.'
+        return {status: -2, message: 'You must be on a voice channel to add a video to the queue.'}
+    }
     
     let regexResult = 0;
     // const youtubeRegex = /^((?:https?:)?\/\/)?((?:www|m)\.)?((?:youtube\.com|youtu.be))(\/(?:[\w\-]+\?v=|embed\/|v\/)?)([\w\-]+)(\S+)?$/
@@ -89,21 +105,37 @@ async function addURLToQueue(interaction){
     //console.log(regexResult)
     const validUrl = ytdl.validateURL(url)
 
-    if(!validUrl)
-        return 'Please type a valid youtube URL /caburro!'
-
-    const voiceChannel = interaction.member.voice.channel
-    // let voiceChannel = client.guilds.cache.get(guildId).voiceStates.cache.get(memberId)?.channel;
-    // console.log(voiceChannel, voiceChannel2)
-    if(!voiceChannel){
-        return 'You must be on a voice channel to add a video to the queue.'
+    if(!validUrl){
+        // let results = {status: null, searchResults: null};
+        // await youtubeSearch(url, results)
+        const results = await yts( url )
+        return { status: 2, searchResults: results.videos.slice(0,5)}
     }
-
-    queuedVideos.push({url: url, textChannelId: interaction.channelId, voiceChannel: voiceChannel, guildId: guildId})
+    
+    let info = await ytdl.getInfo(url);
+    console.log(info)
+    queuedVideos.push({url: url, textChannelId: interaction.channelId, voiceChannel: voiceChannel, guildId: guildId, videoInfo: info})
     eventEmitter.emit('new video');
-    // console.log(queuedVideos);
-    const auxString = (queuedVideos.length - 1)
-    return ('Video added to queue (videos ahead: ' + auxString +'): ' + url)
+    return {status: 1, videoInfo: info}
+}
+
+async function youtubeSearch(searchTerm, results) {
+
+    let promise = await new Promise((resolve, reject) => {
+        search(searchTerm, searchOpts, (err, searchResults) => {
+            results.status = 2
+            if(err || searchResults.length === 0) {
+                // console.log(err.response.data);
+                results.status = -1
+            }
+            // console.dir(searchResults);
+            results.searchResults = searchResults
+            resolve();
+        });
+    })
+    .catch(err => {throw err});
+
+    return promise
 }
 
 async function disconnectBot(){
@@ -139,13 +171,75 @@ async function clearQueue(){
 client.on('interactionCreate', async interaction => {
 	if (!interaction.isChatInputCommand()) return;
 
+    console.log('new interaction')
+
 	const { commandName } = interaction;
     const interactionUserId = interaction.member.user.id;
 
 	if (commandName === 'play') {
-        addURLToQueue(interaction).then( (resposta) => {
-            console.log('resposta', resposta)
-            interaction.reply(resposta);
+        addURLToQueue(interaction).then( (results) => {
+            // console.log('results', results)
+
+            let embedTitle, embedDescription, message;
+            switch (results.status) {
+                case -2:
+                    console.log(-2)
+                    message = results.message
+                    break;
+                case -1:
+                    console.log(-1)
+                    message = 'No videos were found, try typing the url of the desired video.'
+                    break;
+                case 1:
+                    console.log(1)
+                    embedTitle = 'Video added to Queue **(current queue length: '+ queuedVideos.length +').**'
+                    embedDescription = 'Video title: '
+                    break;
+                case 2:
+                    console.log(2)
+                    embedTitle = 'Please pick your video:'
+                    embedDescription = '';
+                    for (let i = 0; i < results.searchResults.length; i++) {
+                        const searchResult = results.searchResults[i];
+                        embedDescription += `**${i+1}:** ${searchResult.title} **(${searchResult.timestamp})**\n`
+                    }
+                    break;                    
+            }
+            if(embedTitle){
+                const row = new ActionRowBuilder()
+                .addComponents(
+                    new ButtonBuilder()
+                        .setCustomId(results.searchResults[0]?.url)
+                        .setLabel('1')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(results.searchResults[1]?.url)
+                        .setLabel('2')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(results.searchResults[2]?.url)
+                        .setLabel('3')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(results.searchResults[3]?.url)
+                        .setLabel('4')
+                        .setStyle(ButtonStyle.Primary),
+                    new ButtonBuilder()
+                        .setCustomId(results.searchResults[4]?.url)
+                        .setLabel('5')
+                        .setStyle(ButtonStyle.Primary),
+                );
+                const embed = new EmbedBuilder()
+                    .setColor(0x0099FF)
+                    .setTitle(embedTitle)
+                    //.setURL('https://discord.js.org')
+                    .setDescription(embedDescription);
+
+                interaction.reply({ephemeral: false, embeds: [embed], components: [row] });
+            }else{
+                console.log(message)
+                interaction.reply(message)
+            }
         })
         return;
 	} else if (commandName === 'queue') {
